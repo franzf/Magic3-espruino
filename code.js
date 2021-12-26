@@ -533,7 +533,7 @@ touchControl.on("longtouch", (p) => {
     console.log("long touch");
 });
 
-var screens=[appScr.clock,appScr.infoCubeScr,sleepWatch];
+var screens=[appScr.clockScr,appScr.infoCubeScr,appScr.testOneScr,sleepWatch];
 var currscr= -1;
 var currint=0;
 setWatch(function(){
