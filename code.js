@@ -2,13 +2,7 @@
 // MIT License (c) 2020 fanoush https://github.com/fanoush
 // see full license text at https://choosealicense.com/licenses/mit/
 
-var glbSt = {
-    brightnessLevel: 64,
-    clockLastMinShown: -1,
-    currVolt: 0,
-    currScr: 0,
-    currSubScr: 0
-};
+E.setTimeZone(-5);
 
 // Watchdog (dog emoji)
 E.kickWatchdog();
@@ -140,17 +134,10 @@ gfxBuf.pageFlip = function (force) {
 
 // set up brightness
 gfxBuf.setBrightness = function (newLevel) {
-    if (newLevel >= 0 && newLevel <= 256) {
-        // if I'm given a valid new level, store it and use it
-        glbSt.brightnessLevel = newLevel;
-        this.currBrightLevel = newLevel;
-    }
-    else {
-        // otherwise don't change it and just read the stored one
-        this.currBrightLevel = glbSt.brightnessLevel;
-    }
-    if (this.isOn) {
-        decimalBrightness = this.currBrightLevel / 256;
+    // if it's a different level than what's currently set, if it's a valid level, and if the display is on
+    if (newLevel !== glbSt.currBrightLevel && (newLevel >= 0 && newLevel <= 256) && this.isOn) {
+        glbSt.currBrightLevel = newLevel;
+        decimalBrightness = glbSt.currBrightLevel / 256;
         if (decimalBrightness == 0 || decimalBrightness == 1) {
             digitalWrite(BACKLIGHT, decimalBrightness);
         } else {
@@ -168,17 +155,58 @@ gfxBuf.screenOn = function () {
     spiUtils.sendCmd(0x11);
     gfxBuf.pageFlip();
     this.isOn = true;
-    this.setBrightness();
+    this.setBrightness(glbSt.setBrightLevel);
+    dispTimeout.startTimeoutCounter();
 };
 
 gfxBuf.screenOff = function () {
     if (!this.isOn) {
         return;
     }
+    dispTimeout.stopTimeoutCounter();
+    gfxBuf.clear();
     touchControl.stopTouch();
     spiUtils.sendCmd(0x10);
+    glbSt.currBrightLevel = -1
     BACKLIGHT.reset();
     this.isOn = false;
+};
+
+var dispTimeout = {
+    defaultTimeout: 20,
+    defaultDimTime: 2,
+    dimBrightness: 16,
+    currTime: -1,
+    timeoutIntervalId: undefined,
+    startTimeoutCounter: function () {
+        dispTimeout.timeoutIntervalId = setInterval(dispTimeout.timeoutCounter, 1000);
+        dispTimeout.currTime = dispTimeout.defaultTimeout;
+    },
+    timeoutCounter: function () {
+        dispTimeout.currTime--;
+        if (dispTimeout.currTime > 0 && dispTimeout.currTime <= dispTimeout.defaultDimTime) {
+            gfxBuf.setBrightness(dispTimeout.dimBrightness);
+        }
+        if (dispTimeout.currTime <= 0) {
+            // turn off watch
+            glbSt.currScr = -1;
+            clearInterval(dispTimeout.timeoutIntervalId);
+            dispTimeout.timeoutIntervalId = -1;
+            clearInterval(glbSt.scrInterval);
+            gfxBuf.clear();
+            gfxBuf.screenOff();
+        }
+
+    },
+    resetTimeoutCountdown: function () {
+        // on activity
+        gfxBuf.setBrightness(glbSt.setBrightLevel);
+        dispTimeout.currTime = dispTimeout.defaultTimeout;
+    },
+    stopTimeoutCounter: function () {
+        clearInterval(dispTimeout.timeoutIntervalId);
+        dispTimeout.timeoutIntervalId = -1;
+    }
 };
 
 // start LCD
@@ -228,8 +256,6 @@ startLcd();
 
 // touchscreen control class from Jeffmer's driver
 var touchControl = {
-    // swipe directions
-    swipeUp: 1, swipeDown: 2, swipeLeft: 3, swipeRight: 4, tap: 5,
     // stuff to keep track of gestures
     watchId: undefined, xCoord: -1, yCoord: -1, midTouch: false,
     // functions here
@@ -264,6 +290,7 @@ var touchControl = {
         touchControl.writeByte(0xA5, 0x03);
     },
     touchEvent: function () {
+        dispTimeout.resetTimeoutCountdown();
         var coords = touchControl.getCoords();
         if (coords.touch && !touchControl.midTouch) {
             touchControl.xCoord = coords.x;
@@ -281,9 +308,9 @@ var touchControl = {
             }
             if (yTravel > xTravel) {
                 // if y changed more than x that means swipe up or down
-                coords.swipeDirection = coords.y > touchControl.yCoord ? touchControl.swipeDown : touchControl.swipeUp;
+                coords.swipeDirection = coords.y > touchControl.yCoord ? "d" : "u";
             } else {
-                coords.swipeDirection = coords.x > touchControl.xCoord ? touchControl.swipeRight : touchControl.swipeLeft;
+                coords.swipeDirection = coords.x > touchControl.xCoord ? "r" : "l";
             }
             touchControl.emit("swipe", coords.swipeDirection);
         }
@@ -293,6 +320,8 @@ var touchControl = {
             touchControl.watchId = clearWatch(touchControl.watchId);
             touchControl.watchId = undefined;
         }
+        touchControl.removeAllListeners('touch');
+        touchControl.removeAllListeners('swipe');
         touchControl.sleepMode();
     },
     writeByte: function (a, d) {
@@ -357,6 +386,74 @@ function batteryStringGenerator(currVolt) {
 require("Font8x16").add(Graphics);
 
 var appScr = {
+    clockScr: function () {
+        glbSt.clockLastMinShown = -1;
+        appFunc.drawClock();
+        return setInterval(function () {
+            appFunc.drawClock();
+        }, 1000);
+    },
+    testOneScr: function () {
+        gfxBuf.setFont("8x16", 2);
+        gfxBuf.setColor(15);
+        gfxBuf.drawString("Test App 1", 20, 20);
+        gfxBuf.setFont("8x16");
+        gfxBuf.drawString(appVars.testStr, 20, 60);
+        gfxBuf.pageFlip();
+        return undefined;
+        /* touchControl.on("touch", function (xyCoords){
+            gfxBuf.drawString("x: " + xyCoords.x + " y: " + xyCoords.y, 20, 100);
+            gfxBuf.pageFlip();
+            vibratePattern([0.5, 5, 100, 500]);
+            touchControl.removeListener("touch");
+        }); */
+    },
+    infoCubeScr: function () {
+        gfxBuf.setFont("6x8", 2);
+        gfxBuf.setColor(10);
+        gfxBuf.drawString("Espruino " + process.version, 30, 20);
+        gfxBuf.setFont("6x8", 1);
+        gfxBuf.setColor(14);
+        gfxBuf.drawString("ST7789 12 bit mode, 32Mbps SPI with DMA", 6, 42);
+        for (var c1 = 0; c1 < 8; c1++) {
+            gfxBuf.setColor(c1 + 8);
+            gfxBuf.fillRect(20 + 25 * c1, 185, 45 + 25 * c1, 205);
+        }
+        for (var c2 = 0; c2 < 8; c2++) {
+            gfxBuf.setColor(c2);
+            gfxBuf.fillRect(20 + 25 * c2, 210, 45 + 25 * c2, 230);
+        }
+        gfxBuf.pageFlip();
+        return setInterval(function () {
+            appFunc.stepCube();
+        }, 5);
+    },
+    randomLinesScr: function () {
+        var cols = (bitsPerPixel == 1) ? 14 : (1 << bitsPerPixel) - 1, w = gfxBuf.getWidth(), h = gfxBuf.getHeight(), r = Math.random;
+        return setInterval(function () {
+            gfxBuf.setColor(1 + r() * cols);
+            gfxBuf.drawLine(r() * w, r() * h, r() * w, r() * h);
+            gfxBuf.pageFlip();
+        }, 5);
+    },
+    randomShapesScr: function () {
+        var cols = (bitsPerPixel == 1) ? 14 : (1 << bitsPerPixel) - 1, w = gfxBuf.getWidth() - 10, h = gfxBuf.getHeight() - 10, r = Math.random;
+        return setInterval(function () {
+            gfxBuf.setBgColor(0);
+            gfxBuf.setColor(1 + r() * cols);
+            x1 = r() * w; x2 = 10 + r() * w;
+            y1 = r() * h; y2 = 10 + r() * h;
+            if (x1 & 1) {
+                gfxBuf.fillEllipse(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
+            } else {
+                gfxBuf.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
+            }
+            gfxBuf.pageFlip();
+        }, 5);
+    }
+};
+
+var appFunc = {
     drawClock: function () {
         // get date
         var dateObj = Date();
@@ -388,45 +485,11 @@ var appScr = {
         }
 
         // draw the date
-        var dateString = dateArr[0] + " " + dateArr[1] + " " + dateArr[2];
+        var dateString = dateArr[0] + ", " + dateArr[1] + " " + dateArr[2];
         gfxBuf.setFontVector(28);
         gfxBuf.setColor(8 + 3);
         gfxBuf.drawString(dateString, (gfxWidth - gfxBuf.stringWidth(dateString)) / 2, 180);
         gfxBuf.pageFlip();
-    },
-    clockScr: function () {
-        glbSt.clockLastMinShown = -1;
-        appScr.drawClock();
-        return setInterval(function () {
-            appScr.drawClock();
-        }, 1000);
-    },
-    testOneScr: function () {
-        gfxBuf.clear(); // native thing
-        gfxBuf.setFont("8x16");
-        gfxBuf.drawString("test1", 20, 20);
-        gfxBuf.pageFlip();
-    },
-    infoCubeScr: function () {
-        gfxBuf.clear();
-        gfxBuf.setFont("6x8", 2);
-        gfxBuf.setColor(10);
-        gfxBuf.drawString("Espruino " + process.version, 30, 20);
-        gfxBuf.setFont("6x8", 1);
-        gfxBuf.setColor(14);
-        gfxBuf.drawString("ST7789 12 bit mode, 32Mbps SPI with DMA", 6, 42);
-        for (var c1 = 0; c1 < 8; c1++) {
-            gfxBuf.setColor(c1 + 8);
-            gfxBuf.fillRect(20 + 25 * c1, 185, 45 + 25 * c1, 205);
-        }
-        for (var c2 = 0; c2 < 8; c2++) {
-            gfxBuf.setColor(c2);
-            gfxBuf.fillRect(20 + 25 * c2, 210, 45 + 25 * c2, 230);
-        }
-        gfxBuf.pageFlip();
-        return setInterval(function () {
-            appScr.stepCube();
-        }, 5);
     },
     stepCube: function () {
         appVars.cubeRx += 0.1;
@@ -435,7 +498,7 @@ var appScr = {
         gfxBuf.fillRect(60, 60, 180, 180);
         gfxBuf.setColor(1 + appVars.cubeCc);
         appVars.cubeCc = (appVars.cubeCc + 1) % 15;
-        appScr.drawCube(120, 120, 120);
+        appFunc.drawCube(120, 120, 120);
         // update the whole display
         gfxBuf.pageFlip();
     },
@@ -483,63 +546,87 @@ var appScr = {
         gfxBuf.drawLine(a[0], a[1], b[0], b[1]);
         a = p(-1, 1, -1); b = p(-1, 1, 1);
         gfxBuf.drawLine(a[0], a[1], b[0], b[1]);
-    },
-    randomLinesScr: function () {
-        gfxBuf.clear();
-        var cols = (bitsPerPixel == 1) ? 14 : (1 << bitsPerPixel) - 1, w = gfxBuf.getWidth(), h = gfxBuf.getHeight(), r = Math.random;
-        return setInterval(function () {
-            gfxBuf.setColor(1 + r() * cols);
-            gfxBuf.drawLine(r() * w, r() * h, r() * w, r() * h);
-            gfxBuf.pageFlip();
-        }, 5);
-    },
-    randomShapesScr: function () {
-        gfxBuf.clear();
-        var cols = (bitsPerPixel == 1) ? 14 : (1 << bitsPerPixel) - 1, w = gfxBuf.getWidth() - 10, h = gfxBuf.getHeight() - 10, r = Math.random;
-        return setInterval(function () {
-            gfxBuf.setBgColor(0);
-            gfxBuf.setColor(1 + r() * cols);
-            x1 = r() * w; x2 = 10 + r() * w;
-            y1 = r() * h; y2 = 10 + r() * h;
-            if (x1 & 1) {
-                gfxBuf.fillEllipse(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
-            } else {
-                gfxBuf.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
-            }
-            gfxBuf.flip();
-        }, 5);
     }
 };
 
 var appVars = {
     cubeRx: 0,
     cubeRy: 0,
-    cubeCc: 1
+    cubeCc: 1,
+    testStr: "is this working"
 };
 
-function sleepWatch() {
-    gfxBuf.clear();
-    gfxBuf.screenOff();
-    return 0;
+var glbSt = {
+    currBrightLevel: -1,
+    setBrightLevel: 64,
+    clockLastMinShown: -1,
+    currVolt: 0,
+    currScr: -1,
+    scrInterval: undefined,
+};
+
+function scrMgr() {
+    var appScrList = [appScr.clockScr, appScr.infoCubeScr, appScr.randomShapesScr, appScr.randomLinesScr, appScr.testOneScr];
+
+    // start by setting the current running screen to 0
+    glbSt.currScr = 0;
+    glbSt.scrInterval = appScrList[glbSt.currScr]();
+
+    touchControl.on("swipe", function (swipeDir) {
+        if (swipeDir === "u" || swipeDir === "d") {
+            // clear screen
+            gfxBuf.clear();
+            // clear the interval of the previous screen, if it gave us one
+            if (glbSt.scrInterval) {
+                clearInterval(glbSt.scrInterval);
+            }
+            // if swiping down
+            if (swipeDir === "u") {
+                if (glbSt.currScr === appScrList.length - 1) {
+                    glbSt.currScr = 0;
+                } else {
+                    glbSt.currScr++;
+                }
+            } else {
+                if (glbSt.currScr === 0) {
+                    glbSt.currScr = appScrList.length - 1;
+                } else {
+                    glbSt.currScr--;
+                }
+            }
+            // and run the next screen
+            glbSt.scrInterval = appScrList[glbSt.currScr]();
+        }
+    });
 }
 
-touchControl.on("touch", (p) => {
-    console.log("touch x: " + p.x + " y:" + p.y);
-});
-touchControl.on("swipe", (d) => {
-    console.log("swipe d: " + d);
-});
-touchControl.on("longtouch", (p) => {
-    console.log("long touch");
-});
-
-var screens=[appScr.clockScr,appScr.infoCubeScr,appScr.testOneScr,sleepWatch];
-var currscr= -1;
-var currint=0;
-setWatch(function(){
-  if (!gfxBuf.isOn) gfxBuf.screenOn();
-  currscr++;if (currscr>=screens.length) currscr=0;
-  if (currint>0) clearInterval(currint);
-  currint=screens[currscr]();
-},BTN1,{ repeat:true, edge:'rising',debounce:25 }
+setWatch(function () {
+    if (gfxBuf.isOn && glbSt.currScr === 0) {
+        // if on clock turn off
+        if (glbSt.scrInterval) {
+            clearInterval(glbSt.scrInterval);
+        }
+        glbSt.currScr = -1;
+        gfxBuf.screenOff();
+    } else if (gfxBuf.isOn && glbSt.currScr !== 0) {
+        // always go back to clock
+        dispTimeout.resetTimeoutCountdown();
+        gfxBuf.clear();
+        if (glbSt.scrInterval) {
+            clearInterval(glbSt.scrInterval);
+        }
+        glbSt.scrInterval = appScr.clockScr();
+        glbSt.currScr = 0;
+    } else {
+        // if off turn on
+        gfxBuf.screenOn();
+        scrMgr();
+    }
+}, BTN1, { repeat: true, edge: 'rising', debounce: 25 }
 );
+
+// to-do: organize UI mess lol
+// have a proper "this starts the UI and keeps an eye on things" function
+// have a proper "this turns off the UI"
+// settings app for brightness
+
